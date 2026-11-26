@@ -148,4 +148,52 @@ describe("OpenMeteoGeocodingProvider", () => {
     const sector17 = await provider.searchLocations("Sector 17 Chandigarh");
     expect(sector17.some((c) => c.name === "Chandigarh")).toBe(true);
   });
+
+  it("parses City, State, Country and resolves Shimla, Himachal Pradesh, India without false Rajasthan/Haryana matches", async () => {
+    const fetcher = vi.fn().mockImplementation(async (url: string) => {
+      // Must query Open-Meteo with clean city name "Shimla", NOT comma-separated string
+      expect(url).toContain("name=Shimla");
+      expect(url).not.toContain("%2C");
+      return {
+        ok: true,
+        json: async () => ({
+          results: [
+            {
+              name: "Shimla",
+              latitude: 28.69275,
+              longitude: 74.57112,
+              country: "India",
+              admin1: "Rajasthan",
+              feature_code: "PPL",
+            },
+            {
+              name: "Shīmla",
+              latitude: 29.63715,
+              longitude: 76.22337,
+              country: "India",
+              admin1: "Haryana",
+              feature_code: "PPL",
+            },
+            {
+              name: "Shimla",
+              latitude: 31.10442,
+              longitude: 77.16662,
+              country: "India",
+              admin1: "Himachal Pradesh",
+              population: 173503,
+              feature_code: "PPLA",
+            },
+          ],
+        }),
+      };
+    });
+
+    const provider = new OpenMeteoGeocodingProvider(fetcher as unknown as typeof fetch);
+    const res = await provider.searchLocations("Shimla, Himachal Pradesh, India");
+    expect(res).toHaveLength(1);
+    expect(res[0].name).toBe("Shimla");
+    expect(res[0].state).toBe("Himachal Pradesh");
+    expect(res[0].country).toBe("India");
+    expect(res[0].latitude).toBeCloseTo(31.10442, 4);
+  });
 });

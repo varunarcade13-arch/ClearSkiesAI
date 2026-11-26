@@ -1,6 +1,7 @@
 import { GeoLocation } from "@/domain/family/types";
 import { ILocationService } from "./ILocationService";
 import { CPCB_PRESET_CITIES } from "../aqi/CPCBReferenceProvider";
+import { parseLocationSpec, rankAndResolveLocation } from "@/domain/location/location-matcher";
 import { z } from "zod";
 
 const GeocodingResultsSchema = z.object({
@@ -12,6 +13,8 @@ const GeocodingResultsSchema = z.object({
     admin1: z.string().max(120).optional(),
     admin2: z.string().max(120).optional(),
     admin3: z.string().max(120).optional(),
+    population: z.number().optional(),
+    feature_code: z.string().max(20).optional(),
   }).passthrough()).optional(),
 }).passthrough();
 
@@ -24,28 +27,36 @@ export class OpenMeteoGeocodingProvider implements ILocationService {
     const trimmed = query.trim();
     if (!trimmed) return [];
 
-    const lower = trimmed.toLowerCase();
-    let queryToSearch = trimmed;
-    if (lower === "gurugram") queryToSearch = "Gurgaon";
-    else if (lower === "bangalore") queryToSearch = "Bengaluru";
-    else if (lower === "calcutta") queryToSearch = "Kolkata";
-    else if (lower === "bombay") queryToSearch = "Mumbai";
-    else if (lower === "madras") queryToSearch = "Chennai";
-    else if (trimmed === "160017") queryToSearch = "Chandigarh";
-    else if (trimmed === "110001") queryToSearch = "Delhi";
+    const spec = parseLocationSpec(trimmed);
+    let queryToSearch = spec.city || trimmed;
+    if (spec.pincode === "160017") queryToSearch = "Chandigarh";
+    else if (spec.pincode === "110001") queryToSearch = "Delhi";
+
+    const searchLower = queryToSearch.toLowerCase();
 
     // Check pre-indexed presets first
-    const matchedPresets: GeoLocation[] = CPCB_PRESET_CITIES.filter((c) =>
-      c.name.toLowerCase().includes(queryToSearch.toLowerCase()) ||
-      c.state.toLowerCase().includes(queryToSearch.toLowerCase()) ||
-      queryToSearch.toLowerCase().includes(c.name.toLowerCase())
-    ).map((c) => {
+    const matchedPresets: GeoLocation[] = CPCB_PRESET_CITIES.filter((c) => {
+      const nameMatch =
+        c.name.toLowerCase().includes(searchLower) ||
+        c.state.toLowerCase().includes(searchLower) ||
+        searchLower.includes(c.name.toLowerCase());
+      if (!nameMatch) return false;
+      if (spec.state && !c.state.toLowerCase().includes(spec.state.toLowerCase()) && !spec.state.toLowerCase().includes(c.state.toLowerCase())) {
+        return false;
+      }
+      if (spec.country && c.country.toLowerCase() !== spec.country.toLowerCase()) {
+        return false;
+      }
+      return true;
+    }).map((c) => {
       const isSubArea =
-        queryToSearch.toLowerCase() !== c.name.toLowerCase() &&
-        queryToSearch.toLowerCase().includes(c.name.toLowerCase());
-      const customLocality = isSubArea
-        ? queryToSearch.replace(new RegExp(c.name, "gi"), "").trim().replace(/^[,-\s]+|[,-\s]+$/g, "")
-        : undefined;
+        Boolean(spec.locality) ||
+        (searchLower !== c.name.toLowerCase() && searchLower.includes(c.name.toLowerCase()));
+      const customLocality = spec.locality
+        ? spec.locality
+        : isSubArea
+          ? queryToSearch.replace(new RegExp(c.name, "gi"), "").trim().replace(/^[,-\s]+|[,-\s]+$/g, "")
+          : undefined;
 
       return {
         name: c.name,
@@ -54,10 +65,12 @@ export class OpenMeteoGeocodingProvider implements ILocationService {
         country: c.country,
         latitude: c.latitude,
         longitude: c.longitude,
+        featureCode: "PPLA",
       };
     });
 
     try {
+      // Always query Open-Meteo with the clean city name (Open-Meteo does not accept "City, State, Country")
       const url = `${this.baseUrl}?name=${encodeURIComponent(queryToSearch)}&count=8&language=en&format=json`;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
@@ -86,11 +99,13 @@ export class OpenMeteoGeocodingProvider implements ILocationService {
 
             const apiResults: GeoLocation[] = apiResultsList.map((r) => ({
               name: r.name,
-              locality: r.admin2 || r.admin3 || undefined,
+              locality: spec.locality || r.admin2 || r.admin3 || undefined,
               state: r.admin1 || undefined,
               country: r.country || "Global",
               latitude: r.latitude,
               longitude: r.longitude,
+              population: r.population,
+              featureCode: r.feature_code,
             }));
 
             // Combine with deduplication
@@ -105,6 +120,12 @@ export class OpenMeteoGeocodingProvider implements ILocationService {
               ) {
                 combined.push(item);
               }
+            }
+
+            // Rank & filter according to explicit city/state/country constraints
+            if (spec.hasExplicitHierarchy) {
+              const ranked = rankAndResolveLocation(spec, combined);
+              return ranked.rankedCandidates;
             }
             return combined;
           }

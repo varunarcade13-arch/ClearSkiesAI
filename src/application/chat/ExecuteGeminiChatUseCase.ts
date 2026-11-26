@@ -11,6 +11,7 @@ import { ILocationService } from "@/infrastructure/location/ILocationService";
 import { IAQIService } from "@/infrastructure/aqi/IAQIService";
 import { IWeatherService } from "@/infrastructure/weather/IWeatherService";
 import { analyzeUserQuery } from "@/domain/ai/query-analyzer";
+import { parseLocationSpec, rankAndResolveLocation } from "@/domain/location/location-matcher";
 import { AirQualityData } from "@/domain/aqi/types";
 import { WeatherData } from "@/domain/weather/types";
 import { GeoLocation } from "@/domain/family/types";
@@ -75,9 +76,10 @@ export class ExecuteGeminiChatUseCase {
         });
       }
 
+      const defaultCountryContext = input.context.familyProfile?.location?.country || "India";
       // Resolve each explicitly requested location
       for (const locName of analysis.explicitLocations) {
-        const resolved = await this.resolveLocationAndMetrics(locName);
+        const resolved = await this.resolveLocationAndMetrics(locName, sanitizedMessages, defaultCountryContext);
         resolvedLocations.push(resolved);
       }
 
@@ -219,7 +221,21 @@ export class ExecuteGeminiChatUseCase {
     return this.aiProvider.generateChatResponse(sanitizedMessages, enrichedContext);
   }
 
-  private async resolveLocationAndMetrics(locName: string): Promise<ResolvedLocationContext> {
+  private hasPreviouslyClarified(messages: ChatMessage[], city: string): boolean {
+    const cityLower = city.toLowerCase();
+    return messages.some(
+      (m) =>
+        m.role === "assistant" &&
+        m.content.includes("Multiple places matched") &&
+        m.content.toLowerCase().includes(cityLower)
+    );
+  }
+
+  private async resolveLocationAndMetrics(
+    locName: string,
+    messages: ChatMessage[] = [],
+    defaultCountryContext = "India"
+  ): Promise<ResolvedLocationContext> {
     if (!this.locationService) {
       return {
         requestedName: locName,
@@ -229,6 +245,7 @@ export class ExecuteGeminiChatUseCase {
     }
 
     try {
+      const spec = parseLocationSpec(locName);
       const candidates: GeoLocation[] = await this.locationService.searchLocations(locName);
 
       if (!candidates || candidates.length === 0) {
@@ -240,27 +257,29 @@ export class ExecuteGeminiChatUseCase {
         };
       }
 
-      // Ambiguity check: if multiple distinct locations returned across different countries or states
+      const matchResult = rankAndResolveLocation(spec, candidates, defaultCountryContext);
+
+      // Never re-ask clarification if already asked for this city in the conversation,
+      // or if the user provided explicit hierarchy (e.g. "Shimla, Himachal Pradesh, India")
+      const alreadyClarified = this.hasPreviouslyClarified(messages, spec.city || locName);
       if (
-        candidates.length >= 2 &&
-        !locName.includes(",") &&
-        candidates[0].name.toLowerCase() === locName.toLowerCase() &&
-        candidates[1].name.toLowerCase() === locName.toLowerCase() &&
-        (candidates[0].country !== candidates[1].country || candidates[0].state !== candidates[1].state)
+        matchResult.isAmbiguous &&
+        matchResult.ambiguousOptions &&
+        matchResult.ambiguousOptions.length > 1 &&
+        !spec.hasExplicitHierarchy &&
+        !alreadyClarified
       ) {
-        const options = candidates.slice(0, 3).map((c) =>
-          [c.name, c.state, c.country].filter(Boolean).join(", ")
-        );
         return {
           requestedName: locName,
           resolvedName: locName,
           isAmbiguous: true,
-          ambiguousOptions: Array.from(new Set(options)),
+          ambiguousOptions: matchResult.ambiguousOptions,
         };
       }
 
-      const top = candidates[0];
-      const fullName = [top.name, top.locality, top.state, top.country]
+      const top = matchResult.selected || candidates[0];
+      const localityDisplay = spec.locality || top.locality;
+      const fullName = [top.name, localityDisplay, top.state, top.country]
         .filter((part, idx, arr) => Boolean(part) && arr.indexOf(part) === idx && part !== "Global")
         .join(", ");
 
@@ -287,7 +306,7 @@ export class ExecuteGeminiChatUseCase {
       return {
         requestedName: locName,
         resolvedName: fullName || top.name,
-        locality: top.locality,
+        locality: localityDisplay,
         state: top.state,
         country: top.country,
         latitude: top.latitude,

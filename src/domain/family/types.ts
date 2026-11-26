@@ -8,6 +8,8 @@ export const GeoLocationSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   pincode: z.string().optional(),
+  population: z.number().optional(),
+  featureCode: z.string().optional(),
 });
 
 export type GeoLocation = z.infer<typeof GeoLocationSchema>;

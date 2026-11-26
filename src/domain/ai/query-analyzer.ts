@@ -96,10 +96,18 @@ const CURRENT_LOCATION_PATTERNS = [
 ];
 
 /**
- * Normalizes place names and resolves common aliases
+ * Normalizes place names and resolves common aliases while preserving comma-separated hierarchy.
  */
 export function normalizePlaceName(name: string): string {
   const trimmed = name.trim().replace(/^[,.\s]+|[,.\s]+$/g, "");
+  if (trimmed.includes(",")) {
+    return trimmed
+      .split(",")
+      .map((part) => normalizePlaceName(part))
+      .filter((part) => part.length > 0)
+      .join(", ");
+  }
+
   const lower = trimmed.toLowerCase();
 
   if (lower === "gurugram") return "Gurgaon";
@@ -147,12 +155,15 @@ function isStopWord(word: string): boolean {
 }
 
 /**
- * Cleans extracted location candidate strings
+ * Cleans extracted location candidate strings while preserving comma-separated hierarchy (e.g., "Shimla, Himachal Pradesh, India")
  */
 function cleanLocationCandidate(str: string): string {
   return str
     .replace(/\b(?:what is|where is|tell me|check|the|in|of|at|for|from|to|between|and|or|vs|versus|pollution|aqi|air quality|levels|level|index|today|now|right now|currently)\b/gi, "")
-    .replace(/[?!,.:;()]/g, "")
+    .replace(/[?!:;()]/g, "")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/^[,.\s]+|[,.\s]+$/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -226,14 +237,15 @@ function extractComparisonLocations(text: string): { locations: string[]; includ
 }
 
 /**
- * Extracts a single explicit location from the text
+ * Extracts a single explicit location from the text, preserving full "City, State, Country" hierarchy.
  */
 function extractSingleLocation(text: string): string | null {
-  // Check for Sector X [City] patterns first, e.g. "Sector 17 Chandigarh" or "Sector 62, Noida"
-  const sectorPattern = /\b(?:Sector|Sec)\s+\d+(?:[A-Za-z])?(?:[,\s]+[A-Za-z]+)?/i;
-  const sectorMatch = text.match(sectorPattern);
-  if (sectorMatch && sectorMatch[0].length > 6) {
-    return normalizePlaceName(sectorMatch[0]);
+  // Check for Sector X [City] patterns first, e.g. "Sector 17 Chandigarh" or "Sector 17, Chandigarh, India"
+  const sectorFullMatch = text.match(
+    /\b(?:Sector|Sec)\s+\d+(?:[A-Za-z])?(?:\s*,\s*|\s+)[A-Za-z\u00C0-\u024F\s,.-]+?(?=\s+(?:aqi|air quality|pollution|smog|levels?|index|right now|today|tomorrow|now|currently)|\?|$)/i
+  );
+  if (sectorFullMatch && sectorFullMatch[0].length > 6) {
+    return normalizePlaceName(sectorFullMatch[0]);
   }
 
   // Check for 6-digit Indian PIN codes (e.g. 160017, 110001)
@@ -242,19 +254,11 @@ function extractSingleLocation(text: string): string | null {
     return pinMatch[1];
   }
 
-  // Check against known metropolitan locations directly (highest precision!)
-  for (const known of KNOWN_LOCATIONS) {
-    const regex = new RegExp(`\\b${known}\\b`, "i");
-    if (regex.test(text)) {
-      return normalizePlaceName(known);
-    }
-  }
-
-  // Prepositional patterns for other cities (e.g. "in Bristol", "of Seattle")
+  // Prepositional patterns supporting comma-separated hierarchy (e.g. "Shimla, Himachal Pradesh, India")
   const prepPatterns = [
-    /(?:aqi|air quality|pollution|smog|levels?|index)\s+(?:in|of|for|at|around)\s+([A-Za-z\s.-]+)/i,
-    /(?:in|of|for|at|around)\s+([A-Za-z\s.-]+?)(?:\s+(?:aqi|air quality|pollution|smog|levels?|index|right now|today|tomorrow|now|\?|$))/i,
-    /(?:what about|how about|check)\s+([A-Za-z\s.-]+?)(?:\s+(?:aqi|air quality|pollution|smog|right now|today|\?|$))/i,
+    /\b(?:aqi|air quality|pollution|smog|levels?|index)\s+(?:in|of|for|at|around)\s+([A-Za-z\u00C0-\u024F0-9\s,.-]+?)(?:\s+(?:right now|today|tomorrow|now|currently)|\?|$)/i,
+    /\b(?:what about|how about|check)\s+([A-Za-z\u00C0-\u024F0-9\s,.-]+?)(?:\s+(?:aqi|air quality|pollution|smog|right now|today|currently)|\?|$)/i,
+    /\b(?:in|of|for|at|around)\s+([A-Za-z\u00C0-\u024F0-9\s,.-]+?)(?:\s+(?:aqi|air quality|pollution|smog|levels?|index|right now|today|tomorrow|now|currently)|\?|$)/i,
   ];
 
   for (const pattern of prepPatterns) {
@@ -264,6 +268,23 @@ function extractSingleLocation(text: string): string | null {
       if (candidate && candidate.length > 2 && !isStopWord(candidate)) {
         return normalizePlaceName(candidate);
       }
+    }
+  }
+
+  // Fallback: check against known metropolitan locations, preserving any trailing ", State, Country"
+  for (const known of KNOWN_LOCATIONS) {
+    const hierarchyRegex = new RegExp(
+      `\\b(${known}(?:\\s*,\\s*[A-Za-z\\u00C0-\\u024F\\s.-]+)+)`,
+      "i"
+    );
+    const hierarchyMatch = text.match(hierarchyRegex);
+    if (hierarchyMatch && hierarchyMatch[1]) {
+      return normalizePlaceName(cleanLocationCandidate(hierarchyMatch[1]));
+    }
+
+    const regex = new RegExp(`\\b${known}\\b`, "i");
+    if (regex.test(text)) {
+      return normalizePlaceName(known);
     }
   }
 
@@ -359,6 +380,56 @@ function extractLocationsFromHistory(history: ChatMessage[]): string[] {
 }
 
 /**
+ * If the immediately preceding assistant message was a location clarification prompt,
+ * extracts the user's selected location (either by option number/ordinal or explicit location text).
+ */
+function extractClarificationSelection(
+  currentQuery: string,
+  history: ChatMessage[]
+): string | null {
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+  if (!lastAssistant || !/Multiple places matched|Did you mean:/i.test(lastAssistant.content)) {
+    return null;
+  }
+
+  // Parse bullet options from assistant message: "• City, State, Country" or "- City, State, Country"
+  const options = lastAssistant.content
+    .split("\n")
+    .map((line) => line.match(/^\s*[•\-*]\s*(.+)$/)?.[1]?.trim())
+    .filter((opt): opt is string => Boolean(opt));
+
+  const cleaned = currentQuery.trim();
+
+  // Handle numeric/ordinal selection ("1", "option 1", "the first one", "first")
+  const numMatch = cleaned.match(/^(?:option\s*)?([1-3])(?:\b|$)/i);
+  if (numMatch && options[Number(numMatch[1]) - 1]) {
+    return normalizePlaceName(options[Number(numMatch[1]) - 1]);
+  }
+  if (/\b(?:first|1st)\b/i.test(cleaned) && options[0]) return normalizePlaceName(options[0]);
+  if (/\b(?:second|2nd)\b/i.test(cleaned) && options[1]) return normalizePlaceName(options[1]);
+  if (/\b(?:third|3rd)\b/i.test(cleaned) && options[2]) return normalizePlaceName(options[2]);
+
+  // Handle standalone location reply like "Hyderabad, Telangana, India" or "Shimla, Himachal Pradesh, India"
+  const explicit = extractSingleLocation(cleaned);
+  if (explicit) {
+    return explicit;
+  }
+
+  // Match directly against one of the offered options or a comma-separated place name
+  const candidate = cleanLocationCandidate(cleaned);
+  const matchesOfferedOption = options.some(
+    (opt) =>
+      opt.toLowerCase().includes(candidate.toLowerCase()) ||
+      candidate.toLowerCase().includes(opt.split(",")[0].trim().toLowerCase())
+  );
+  if (candidate && candidate.length > 2 && !isStopWord(candidate) && (matchesOfferedOption || candidate.includes(","))) {
+    return normalizePlaceName(candidate);
+  }
+
+  return null;
+}
+
+/**
  * Comprehensive analysis of user query and conversation context
  */
 export function analyzeUserQuery(
@@ -369,6 +440,20 @@ export function analyzeUserQuery(
   const cleaned = currentQuery.trim();
   const intent = detectQueryIntent(cleaned);
   const isComp = isComparisonQuery(cleaned);
+
+  // 0. Check if user is answering a preceding clarification prompt
+  const clarificationSelection = extractClarificationSelection(cleaned, conversationHistory);
+  if (clarificationSelection && !isComp && !CURRENT_LOCATION_PATTERNS.some((p) => p.test(cleaned))) {
+    return {
+      intent: "AQI_QUERY",
+      locationType: "EXPLICIT",
+      explicitLocations: [clarificationSelection],
+      isComparison: false,
+      isCurrentLocationComparison: false,
+      referencingPreviousLocation: false,
+      cleanedQuery: cleaned,
+    };
+  }
 
   // Check if explicitly referencing previous location ("there", "in that city", "for that place")
   const referencesThere = /\b(?:there|in that city|for that place|in that location)\b/i.test(cleaned);
