@@ -15,6 +15,7 @@ import {
   Lightbulb,
   ShieldAlert,
   ArrowRight,
+  Scale,
 } from "lucide-react";
 
 interface StructuredChatTurn {
@@ -168,6 +169,40 @@ export function AIAssistantView() {
               {/* Render Structured Elements if Assistant */}
               {m.structuredData && (
                 <div className="space-y-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+                  {/* Location Comparison Cards if present */}
+                  {m.structuredData.locationsCompared && m.structuredData.locationsCompared.length > 1 && (
+                    <div className="space-y-1.5">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                        <Scale className="w-3.5 h-3.5 text-brand-500" />
+                        Location Air Quality Comparison
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {m.structuredData.locationsCompared.map((loc, lIdx) => (
+                          <div
+                            key={lIdx}
+                            className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-700/80 text-xs space-y-1"
+                          >
+                            <div className="font-bold flex items-center justify-between">
+                              <span className="truncate">{loc.name}</span>
+                              <span className="text-[11px] font-extrabold px-1.5 py-0.5 rounded bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300">
+                                AQI {loc.aqi ?? "N/A"}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                              Status: <span className="font-semibold">{loc.category ?? "Unknown"}</span>
+                              {loc.pm25 !== undefined && ` • PM2.5: ${loc.pm25} µg/m³`}
+                            </div>
+                            {loc.source && (
+                              <div className="text-[10px] text-slate-500 truncate">
+                                Source: {loc.source}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Actionable Tips */}
                   {m.structuredData.actionableTips?.length > 0 && (
                     <div className="space-y-1.5">

@@ -200,4 +200,98 @@ describe("GoogleGenAIProvider", () => {
     await provider.generateChatResponse([{ role: "user", content: "Protect my household" }], { locationName: "Delhi", aqiData: mockAqi, familyProfile: mockProfile });
     expect(chatCall.mock.calls[1][0].contents).toContain("Young Children: Yes");
   });
+
+  it("handles location comparisons, general questions, and resolved metrics in demo mode", async () => {
+    const demoProvider = new GoogleGenAIProvider(undefined);
+
+    // Comparison in demo mode
+    const compRes = await demoProvider.generateChatResponse(
+      [{ role: "user", content: "Compare Mohali and Delhi" }],
+      {
+        locationName: "Mohali",
+        isComparison: true,
+        resolvedLocations: [
+          { requestedName: "Mohali", resolvedName: "Mohali, Punjab", aqiData: { ...mockAqi, aqi: 178, category: "Moderate" } },
+          { requestedName: "Delhi", resolvedName: "Delhi", aqiData: { ...mockAqi, aqi: 368, category: "Very Poor" } },
+        ],
+      }
+    );
+    expect(compRes.answer).toContain("Air quality comparison between Mohali, Punjab and Delhi");
+    expect(compRes.answer).toContain("Mohali, Punjab currently has cleaner air");
+
+    // General queries in demo mode
+    const pm25Res = await demoProvider.generateChatResponse(
+      [{ role: "user", content: "What is PM2.5?" }],
+      { locationName: "General", generalQuery: true }
+    );
+    expect(pm25Res.answer).toContain("PM2.5 refers to fine particulate matter");
+
+    const invRes = await demoProvider.generateChatResponse(
+      [{ role: "user", content: "How does temperature inversion happen?" }],
+      { locationName: "General", generalQuery: true }
+    );
+    expect(invRes.answer).toContain("Thermal inversion occurs when a layer of warm air acts like a lid");
+
+    const sustainRes = await demoProvider.generateChatResponse(
+      [{ role: "user", content: "How can I reduce my carbon footprint?" }],
+      { locationName: "General", generalQuery: true }
+    );
+    expect(sustainRes.answer).toContain("Reducing emissions and carbon footprints");
+
+    const commRes = await demoProvider.generateChatResponse(
+      [{ role: "user", content: "How can the community improve air quality?" }],
+      { locationName: "General", generalQuery: true }
+    );
+    expect(commRes.answer).toContain("Community-level air quality protection");
+
+    // Single explicit location in demo mode
+    const singleExplicitRes = await demoProvider.generateChatResponse(
+      [{ role: "user", content: "What is the AQI of Mohali?" }],
+      {
+        locationName: "Mohali",
+        resolvedLocations: [
+          { requestedName: "Mohali", resolvedName: "Mohali, Punjab", aqiData: { ...mockAqi, aqi: 178, category: "Moderate" } },
+        ],
+      }
+    );
+    expect(singleExplicitRes.answer).toContain("At the current AQI of 178 (Moderate, PM2.5: 190 µg/m³) in Mohali, Punjab");
+  });
+
+  it("builds prompts for comparison and general inquiries in live mode", async () => {
+    const provider = new GoogleGenAIProvider("mock-api-key");
+    const chatCall = vi.fn().mockResolvedValue({
+      text: JSON.stringify({ answer: "Advice", actionableTips: [], scientificRationale: "Reason", suggestedFollowUps: [] }),
+    });
+    // @ts-expect-error Controlled SDK boundary for prompt coverage.
+    provider.genAI = { models: { generateContent: chatCall } } as unknown as GoogleGenAI;
+
+    // General query prompt
+    await provider.generateChatResponse([{ role: "user", content: "What is ozone?" }], {
+      locationName: "General",
+      generalQuery: true,
+    });
+    expect(chatCall.mock.calls[0][0].contents).toContain("GENERAL INQUIRY");
+
+    // Comparison prompt
+    await provider.generateChatResponse([{ role: "user", content: "Compare Mohali and Delhi" }], {
+      locationName: "Mohali",
+      isComparison: true,
+      resolvedLocations: [
+        { requestedName: "Mohali", resolvedName: "Mohali", aqiData: { ...mockAqi, aqi: 178 } },
+        { requestedName: "Delhi", resolvedName: "Delhi", aqiData: { ...mockAqi, aqi: 368 } },
+      ],
+    });
+    expect(chatCall.mock.calls[1][0].contents).toContain("COMPARISON OF REQUESTED LOCATIONS");
+    expect(chatCall.mock.calls[1][0].contents).toContain("Location 1: Mohali");
+    expect(chatCall.mock.calls[1][0].contents).toContain("Location 2: Delhi");
+
+    // Single explicit location prompt
+    await provider.generateChatResponse([{ role: "user", content: "AQI in Mohali" }], {
+      locationName: "Mohali",
+      resolvedLocations: [
+        { requestedName: "Mohali", resolvedName: "Mohali, Punjab", aqiData: { ...mockAqi, aqi: 178 } },
+      ],
+    });
+    expect(chatCall.mock.calls[2][0].contents).toContain("REQUESTED LOCATION METRICS (Mohali, Punjab)");
+  });
 });

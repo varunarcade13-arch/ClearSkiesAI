@@ -251,20 +251,77 @@ Generate a JSON response following this structure:
   }
 
   private buildChatSystemPrompt(context: ChatContext): string {
-    const aqi = context.aqiData ? `${context.aqiData.aqi} (${context.aqiData.category})` : "Elevated Winter Baseline (Demo)";
-    const loc = context.locationName || "Selected Area";
     const profile = context.familyProfile;
+    let environmentalContextBlock = "";
 
-    return `
-You are the ClearSkies AI Assistant, an expert in urban air quality, atmospheric science, and environmental health protection.
+    if (context.generalQuery) {
+      environmentalContextBlock = `GENERAL INQUIRY:
+The user is asking a conceptual, scientific, or general knowledge question.
+- Do NOT force an unrelated city AQI reading or fabricate a local measurement.
+- Answer the question accurately, scientifically, and naturally.`;
+    } else if (context.isComparison && context.resolvedLocations && context.resolvedLocations.length >= 2) {
+      environmentalContextBlock = `COMPARISON OF REQUESTED LOCATIONS:
+The user is explicitly comparing air quality between multiple locations.
+${context.resolvedLocations
+  .map((loc, idx) => {
+    const aqi = loc.aqiData ? `${loc.aqiData.aqi} (${loc.aqiData.category})` : "Data unavailable";
+    const pm25 = loc.aqiData?.pollutants.pm25?.value !== undefined ? `${loc.aqiData.pollutants.pm25.value} µg/m³` : "N/A";
+    const pm10 = loc.aqiData?.pollutants.pm10?.value !== undefined ? `${loc.aqiData.pollutants.pm10.value} µg/m³` : "N/A";
+    const dominant = loc.aqiData?.dominantPollutant || "PM2.5";
+    const source = loc.aqiData?.source || "Monitoring Station / Model";
+    const timestamp = loc.aqiData?.timestamp || "Latest available";
+    const station = loc.aqiData?.station?.name || loc.locality || "Regional grid";
+    return `Location ${idx + 1}: ${loc.resolvedName}
+  - AQI: ${aqi} [Standard: ${loc.aqiData?.standard || "INDIAN_NAQI"}]
+  - Dominant Pollutant: ${dominant} | PM2.5: ${pm25} | PM10: ${pm10}
+  - Station: ${station} | Source: ${source} (${loc.aqiData?.sourceType === "STATION_OBSERVATION" ? "Measured ground station" : "Atmospheric model reanalysis"})
+  - Observation Time: ${timestamp}`;
+  })
+  .join("\n\n")}
 
-CURRENT LOCATION & METRICS:
+CRITICAL COMPARISON INSTRUCTIONS:
+1. Provide a direct, transparent side-by-side comparison of the requested locations.
+2. Clearly state which location currently has cleaner air and lower particulate concentration.
+3. Compare both PM2.5 and overall AQI values using the verified data above.
+4. Do NOT substitute the user's current GPS location unless they explicitly asked to compare their current location.`;
+    } else if (context.resolvedLocations && context.resolvedLocations.length >= 1 && context.resolvedLocations[0].aqiData) {
+      const primary = context.resolvedLocations[0];
+      const aqiData = primary.aqiData!;
+      const aqi = `${aqiData.aqi} (${aqiData.category})`;
+      const pm25 = aqiData.pollutants.pm25?.value !== undefined ? `${aqiData.pollutants.pm25.value} µg/m³` : "Unknown";
+      const pm10 = aqiData.pollutants.pm10?.value !== undefined ? `${aqiData.pollutants.pm10.value} µg/m³` : "Unknown";
+      const station = aqiData.station?.name || primary.locality || "Regional grid";
+      const source = aqiData.source || "Station / Model";
+      const sourceType = aqiData.sourceType === "STATION_OBSERVATION" ? "Verified ground observation" : "Atmospheric model estimate";
+
+      environmentalContextBlock = `REQUESTED LOCATION METRICS (${primary.resolvedName}):
+- Location: ${primary.resolvedName}
+- Live AQI: ${aqi} [Standard: ${aqiData.standard}]
+- PM2.5: ${pm25} | PM10: ${pm10}
+- Dominant Pollutant: ${aqiData.dominantPollutant}
+- Station: ${station}
+- Data Source: ${source} (${sourceType})
+- Observation Timestamp: ${aqiData.timestamp}
+- Weather: ${primary.weatherData ? `${primary.weatherData.temperature}°C, ${primary.weatherData.condition}, humidity ${primary.weatherData.relativeHumidity}%, wind ${primary.weatherData.windSpeed} km/h` : "Winter baseline"}
+- Atmospheric Inversion Risk: ${primary.weatherData?.inversionRisk.level || "ELEVATED"}
+
+CRITICAL INSTRUCTION: The user specifically asked about "${primary.resolvedName}". Answer strictly using the verified data for "${primary.resolvedName}". NEVER substitute the user's current GPS location.`;
+    } else {
+      const aqi = context.aqiData ? `${context.aqiData.aqi} (${context.aqiData.category})` : "Elevated Winter Baseline (Demo)";
+      const loc = context.locationName || "Selected Area";
+      environmentalContextBlock = `CURRENT LOCATION & METRICS:
 - Location: ${loc}
 - Live AQI: ${aqi}
 - PM2.5: ${context.aqiData?.pollutants.pm25?.value || "Unknown"} µg/m³
 - Dominant Pollutant: ${context.aqiData?.dominantPollutant || "PM2.5"}
 - Weather: ${context.weatherData ? `${context.weatherData.temperature}°C, ${context.weatherData.condition}, humidity ${context.weatherData.relativeHumidity}%, wind ${context.weatherData.windSpeed} km/h` : "Winter calm inversion"}
-- Atmospheric Inversion Risk: ${context.weatherData?.inversionRisk.level || "HIGH"}
+- Atmospheric Inversion Risk: ${context.weatherData?.inversionRisk.level || "HIGH"}`;
+    }
+
+    return `
+You are the ClearSkies AI Assistant, an expert in urban air quality, atmospheric science, and environmental health protection.
+
+${environmentalContextBlock}
 
 FAMILY CONTEXT (If Provided):
 ${
@@ -292,10 +349,129 @@ INSTRUCTIONS:
     reason = "Add GEMINI_API_KEY for live GenAI"
   ): ChatResponse {
     const userMsg = [...messages].reverse().find((m) => m.role === "user")?.content.toLowerCase() || "";
-    const aqi = context.aqiData?.aqi || 340;
-    const loc = context.locationName || "Delhi-NCR";
 
-    let answer = `At the current AQI of ${aqi} in ${loc}, outdoor air is hazardous to breathe without protection. Fine particulate matter (PM2.5) easily penetrates deep into lung alveoli and enters the bloodstream.`;
+    // Case 1: Comparison between multiple locations
+    if (context.isComparison && context.resolvedLocations && context.resolvedLocations.length >= 2) {
+      const loc1 = context.resolvedLocations[0];
+      const loc2 = context.resolvedLocations[1];
+      const aqi1 = loc1.aqiData?.aqi ?? 185;
+      const aqi2 = loc2.aqiData?.aqi ?? 368;
+      const pm25_1 = loc1.aqiData?.pollutants.pm25?.value ?? "N/A";
+      const pm25_2 = loc2.aqiData?.pollutants.pm25?.value ?? "N/A";
+      const cleaner = aqi1 < aqi2 ? loc1.resolvedName : loc2.resolvedName;
+      const diff = Math.abs(aqi1 - aqi2);
+
+      const answer = `Air quality comparison between ${loc1.resolvedName} and ${loc2.resolvedName}:
+• ${loc1.resolvedName}: AQI ${aqi1} (${loc1.aqiData?.category || "Moderate"}, PM2.5: ${pm25_1} µg/m³, Source: ${loc1.aqiData?.source || "Open-Meteo"})
+• ${loc2.resolvedName}: AQI ${aqi2} (${loc2.aqiData?.category || "Very Poor"}, PM2.5: ${pm25_2} µg/m³, Source: ${loc2.aqiData?.source || "CPCB / Open-Meteo"})
+
+${cleaner} currently has cleaner air (a difference of ${diff} AQI points).`;
+
+      return {
+        answer: `[DEMO MODE – ${reason}]\n\n${answer}`,
+        actionableTips: [
+          `If in ${aqi1 > aqi2 ? loc1.resolvedName : loc2.resolvedName}, wear an N95 respirator outdoors due to elevated particulates.`,
+          "Avoid outdoor aerobic workouts in high-pollution areas during morning inversion hours.",
+          "Check local monitoring updates before traveling between these cities.",
+        ],
+        scientificRationale:
+          "Regional topography, boundary layer inversion depth, and local emission densities create substantial air quality disparities between metropolitan regions.",
+        suggestedFollowUps: [
+          `What precautions should I take in ${loc1.resolvedName}?`,
+          `What precautions should I take in ${loc2.resolvedName}?`,
+          "Why is air quality different across these cities?",
+        ],
+        isDemoMode: true,
+        modelUsed: "Rule-Based Environmental Science Engine (Demo Mode)",
+      };
+    }
+
+    // Case 2: General / conceptual questions
+    if (context.generalQuery) {
+      if (userMsg.includes("pm2.5") || userMsg.includes("pm25") || userMsg.includes("particulate")) {
+        return {
+          answer: `[DEMO MODE – ${reason}]\n\nPM2.5 refers to fine particulate matter with aerodynamic diameters under 2.5 micrometers. Because they are 30 times thinner than a human hair, these microscopic particles bypass nasal cilia, penetrate deep into lung alveoli, and enter the bloodstream.`,
+          actionableTips: [
+            "Use certified N95 or FFP2 respirators; cloth and surgical masks do not filter fine PM2.5.",
+            "Operate HEPA (H13) air purifiers in sealed indoor living spaces.",
+            "Avoid burning candles, incense, or biomass indoors.",
+          ],
+          scientificRationale: "PM2.5 particles carry heavy metals, polycyclic aromatic hydrocarbons, and sulfates directly into lung parenchyma.",
+          suggestedFollowUps: [
+            "What is the difference between PM2.5 and PM10?",
+            "How do air purifiers filter PM2.5?",
+            "What are safe WHO guidelines for PM2.5?",
+          ],
+          isDemoMode: true,
+          modelUsed: "Rule-Based Environmental Science Engine (Demo Mode)",
+        };
+      }
+      if (userMsg.includes("inversion") || userMsg.includes("weather") || userMsg.includes("wind")) {
+        return {
+          answer: `[DEMO MODE – ${reason}]\n\nThermal inversion occurs when a layer of warm air acts like a lid, trapping cold air and pollutants near the surface. During calm winter nights, rapid radiative ground cooling suppresses vertical atmospheric mixing, concentrating vehicle exhaust and biomass smoke right at breathing height.`,
+          actionableTips: [
+            "Avoid strenuous outdoor activities during early morning and late evening inversion peaks.",
+            "Schedule essential outdoor errands during afternoon hours when solar heating temporarily elevates the boundary layer.",
+            "Keep indoor spaces sealed with continuous mechanical filtration.",
+          ],
+          scientificRationale: "Negative vertical temperature gradients suppress atmospheric buoyancy and natural plume dispersion.",
+          suggestedFollowUps: [
+            "How does wind speed influence air pollution?",
+            "When does the morning inversion break?",
+            "Why is smog worse in winter than summer?",
+          ],
+          isDemoMode: true,
+          modelUsed: "Rule-Based Environmental Science Engine (Demo Mode)",
+        };
+      }
+      if (userMsg.includes("carbon footprint") || userMsg.includes("sustainable") || userMsg.includes("emission")) {
+        return {
+          answer: `[DEMO MODE – ${reason}]\n\nReducing emissions and carbon footprints during severe winter smog involves shifting transportation, cutting domestic biomass combustion, and using energy efficiently. Prioritizing electrified public transit like metro rail directly reduces ground-level vehicle exhaust.`,
+          actionableTips: [
+            "Use metro rail, electric buses, or carpooling for daily commutes.",
+            "Eliminate any open burning of garden leaves, plastic, or waste.",
+            "Conserve domestic heating energy and transition to induction cooking where possible.",
+          ],
+          scientificRationale: "Mobile combustion sources contribute 30-40% of urban nitrogen oxides (NOx) and fine carbonaceous soot.",
+          suggestedFollowUps: [
+            "Which commuting alternatives reduce emissions the most?",
+            "How can communities improve local air quality?",
+            "What sustainable changes can I make at home?",
+          ],
+          isDemoMode: true,
+          modelUsed: "Rule-Based Environmental Science Engine (Demo Mode)",
+        };
+      }
+      if (userMsg.includes("community") || userMsg.includes("neighbourhood") || userMsg.includes("school")) {
+        return {
+          answer: `[DEMO MODE – ${reason}]\n\nCommunity-level air quality protection requires collective civic action, clean energy enforcement, and protecting vulnerable children at schools. Initiatives include setting up neighborhood air sensor networks, banning trash fires, and adopting green buffer zones.`,
+          actionableTips: [
+            "Organize community awareness campaigns on zero waste burning.",
+            "Encourage schools to reschedule morning physical education indoors during severe smog days.",
+            "Report local illegal industrial or construction dust violations to municipal hotlines.",
+          ],
+          scientificRationale: "Localized emission abatement directly reduces micro-level hot spot particulate spikes in residential neighborhoods.",
+          suggestedFollowUps: [
+            "How can schools protect children during severe pollution?",
+            "How can our neighbourhood monitor air quality?",
+            "What are the best indoor plants for clean air?",
+          ],
+          isDemoMode: true,
+          modelUsed: "Rule-Based Environmental Science Engine (Demo Mode)",
+        };
+      }
+    }
+
+    // Case 3: Single location (explicit or current)
+    const primaryLoc = (context.resolvedLocations && context.resolvedLocations[0]) || undefined;
+    const loc = primaryLoc ? primaryLoc.resolvedName : (context.locationName || "Delhi-NCR");
+    const aqi = primaryLoc?.aqiData?.aqi ?? (context.aqiData?.aqi ?? 340);
+    const category = primaryLoc?.aqiData?.category ?? (context.aqiData?.category ?? "Very Poor");
+    const pm25 = primaryLoc?.aqiData?.pollutants.pm25?.value ?? (context.aqiData?.pollutants.pm25?.value ?? 180);
+    const source = primaryLoc?.aqiData?.source ?? (context.aqiData?.source ?? "Open-Meteo / CAAQMS");
+    const timestamp = primaryLoc?.aqiData?.timestamp ?? (context.aqiData?.timestamp ?? new Date().toISOString());
+
+    let answer = `At the current AQI of ${aqi} (${category}, PM2.5: ${pm25} µg/m³) in ${loc}, outdoor air is hazardous to breathe without protection (Source: ${source}, recorded ${new Date(timestamp).toLocaleTimeString()}). Fine particulate matter (PM2.5) easily penetrates deep into lung alveoli and enters the bloodstream.`;
     const tips = [
       "Wear a certified N95 or FFP2 respirator mask whenever stepping outdoors.",
       "Reschedule all outdoor aerobic workouts to indoor sessions to prevent deep inhalation of particles.",
@@ -315,7 +491,7 @@ INSTRUCTIONS:
       tips[2] = "If commute to school is required, ensure an appropriately sized child N95 mask is worn tightly.";
       rationale = "Developing lung parenchyma and smaller airways are disproportionately irritated by acid aerosols and PM2.5.";
     } else if (userMsg.includes("walk") || userMsg.includes("jog") || userMsg.includes("exercise") || userMsg.includes("workout")) {
-      answer = `Morning walks must be suspended when AQI is ${aqi}. In early mornings, cold ground temperatures create a thermal inversion lid that concentrates toxic particulates right at chest level.`;
+      answer = `Morning walks must be suspended when AQI is ${aqi} in ${loc}. In early mornings, cold ground temperatures create a thermal inversion lid that concentrates toxic particulates right at chest level.`;
       tips[0] = "Shift workouts indoors: substitute outdoor runs with indoor yoga, bodyweight circuits, or skipping.";
       tips[1] = "If you must go outside, do so around 1:00 PM - 3:00 PM when solar warming temporarily lifts the inversion layer.";
       tips[2] = "Always wear a well-fitted N95 mask if walking outdoors; a surgical or cloth mask does not filter PM2.5.";

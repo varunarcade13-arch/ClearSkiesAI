@@ -94,4 +94,58 @@ describe("OpenMeteoGeocodingProvider", () => {
     await expect(search).resolves.toEqual([]);
     vi.useRealTimers();
   });
+
+  it("handles city aliases, Indian PIN codes, and multi-word fallback searches", async () => {
+    const fetcher = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("Sector%2017%20Chandigarh")) {
+        return { ok: true, json: async () => ({ results: [] }) };
+      }
+      if (url.includes("Chandigarh")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ name: "Chandigarh", latitude: 30.73, longitude: 76.78, country: "India", admin1: "Chandigarh" }],
+          }),
+        };
+      }
+      if (url.includes("Chennai")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [{ name: "Chennai", latitude: 13.08, longitude: 80.27, country: "India", admin1: "Tamil Nadu" }],
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ results: [] }) };
+    });
+
+    const provider = new OpenMeteoGeocodingProvider(fetcher as unknown as typeof fetch);
+
+    // Aliases
+    const gurugram = await provider.searchLocations("Gurugram");
+    expect(gurugram.some((c) => c.name === "Gurgaon")).toBe(true);
+
+    const bangalore = await provider.searchLocations("Bangalore");
+    expect(bangalore.some((c) => c.name === "Bengaluru")).toBe(true);
+
+    const calcutta = await provider.searchLocations("Calcutta");
+    expect(calcutta.some((c) => c.name === "Kolkata")).toBe(true);
+
+    const bombay = await provider.searchLocations("Bombay");
+    expect(bombay.some((c) => c.name === "Mumbai")).toBe(true);
+
+    const madras = await provider.searchLocations("Madras");
+    expect(madras.some((c) => c.name === "Chennai")).toBe(true);
+
+    // PIN codes
+    const pin1 = await provider.searchLocations("160017");
+    expect(pin1.some((c) => c.name === "Chandigarh")).toBe(true);
+
+    const pin2 = await provider.searchLocations("110001");
+    expect(pin2.some((c) => c.name === "Delhi")).toBe(true);
+
+    // Multi-word fallback
+    const sector17 = await provider.searchLocations("Sector 17 Chandigarh");
+    expect(sector17.some((c) => c.name === "Chandigarh")).toBe(true);
+  });
 });

@@ -8,11 +8,43 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ResolvedLocationContext {
+  requestedName: string;
+  resolvedName: string;
+  locality?: string;
+  state?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+  aqiData?: AirQualityData;
+  weatherData?: WeatherData;
+  isCurrentLocation?: boolean;
+  unresolved?: boolean;
+  isAmbiguous?: boolean;
+  ambiguousOptions?: string[];
+  errorMessage?: string;
+}
+
+export interface LocationComparisonItem {
+  name: string;
+  aqi?: number;
+  category?: string;
+  dominantPollutant?: string;
+  pm25?: number;
+  pm10?: number;
+  source?: string;
+  timestamp?: string;
+}
+
 export interface ChatContext {
   locationName: string;
   aqiData?: AirQualityData;
   weatherData?: WeatherData;
   familyProfile?: FamilyProfile;
+  resolvedLocations?: ResolvedLocationContext[];
+  isComparison?: boolean;
+  queryIntent?: string;
+  generalQuery?: boolean;
 }
 
 export interface ChatResponse {
@@ -22,6 +54,7 @@ export interface ChatResponse {
   suggestedFollowUps: string[];
   isDemoMode: boolean;
   modelUsed: string;
+  locationsCompared?: LocationComparisonItem[];
 }
 
 export interface IGenAIProvider {

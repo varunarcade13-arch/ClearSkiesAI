@@ -117,7 +117,7 @@ describe("Application Layer Use Cases", () => {
       expect(res.answer).toBe("Response text");
       expect(mockAi.generateChatResponse).toHaveBeenCalledWith(
         [{ role: "user", content: "Hello" }],
-        { locationName: "Delhi" }
+        expect.objectContaining({ locationName: "Delhi" })
       );
     });
   });

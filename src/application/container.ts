@@ -39,7 +39,12 @@ class ServiceContainer {
 
     this.getLiveAQIUseCase = new GetLiveAQIUseCase(this.aqiService, this.weatherService);
     this.getForecastUseCase = new GetForecastUseCase(this.aqiService);
-    this.executeChatUseCase = new ExecuteGeminiChatUseCase(this.aiProvider);
+    this.executeChatUseCase = new ExecuteGeminiChatUseCase(
+      this.aiProvider,
+      this.locationService,
+      this.aqiService,
+      this.weatherService
+    );
     this.generatePlanUseCase = new GenerateFamilyPlanUseCase(
       this.aqiService,
       this.weatherService,

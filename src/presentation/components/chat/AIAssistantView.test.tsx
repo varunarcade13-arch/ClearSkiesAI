@@ -59,4 +59,29 @@ describe("AIAssistantView", () => {
     expect(screen.getByText(/Current AQI: Loading/)).toBeInTheDocument();
     expect(screen.getByText(/AQI: N\/A.*Temp: N\/A/)).toBeInTheDocument();
   });
+
+  it("renders location comparison cards when present in response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        answer: "Comparison summary: Mohali has cleaner air than Delhi.",
+        actionableTips: ["Wear mask in Delhi"],
+        scientificRationale: "Inversion traps particulates.",
+        suggestedFollowUps: ["Check weather"],
+        locationsCompared: [
+          { name: "Mohali", aqi: 178, category: "Moderate", pm25: 82, source: "Open-Meteo" },
+          { name: "Delhi", aqi: 368, category: "Very Poor", pm25: 195, source: "CPCB" },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AIAssistantView />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Message for ClearSkies AI Assistant" }), { target: { value: "Compare Mohali and Delhi" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("Location Air Quality Comparison")).toBeInTheDocument();
+    expect(screen.getByText("Mohali")).toBeInTheDocument();
+    expect(screen.getByText("AQI 178")).toBeInTheDocument();
+    expect(screen.getByText("Delhi")).toBeInTheDocument();
+    expect(screen.getByText("AQI 368")).toBeInTheDocument();
+  });
 });

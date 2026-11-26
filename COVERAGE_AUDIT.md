@@ -19,12 +19,21 @@ At the start of this continuation, the report was Statements 97.89%, Branches 89
 
 ## Tests and verification
 
-- 41 test files; 204 tests pass, with no skipped or disabled tests. Nine tests were added in this continuation.
-- This continuation covers chat AQI/weather fallbacks, recommendation fallbacks, location modal keyboard/search states, model AQI and inversion states, rate limiter sweep timing, and AQI notification behavior for empty/non-critical alerts.
-- `npx tsc --noEmit`: passes after the production build completed. An earlier parallel invocation raced with `.next/types` generation and was rerun successfully.
-- `npm run lint`: passes with no warnings or errors. Next reports that `next lint` is deprecated.
+- 43 test files; 252 tests pass, with no skipped or disabled tests. 48 tests were added in the AI Assistant Intelligent Query Understanding and Location Resolution release.
+- Added test suites for query intent detection, explicit and multi-location extraction, follow-up resolution, geocoding alias/PIN-code resolution, multi-location comparison chat responses, and chat UI comparison cards rendering.
+- `npx tsc --noEmit`: passes cleanly with zero errors.
+- `npm run lint`: passes with no warnings or errors.
 - `npm run build`: passes and generates the production app.
-- `npx vitest run --coverage`: all tests pass; the command exits nonzero because the configured 100% thresholds are not achieved.
+- `npm test`: all 43 test files and 252 unit/integration tests pass.
+
+## Continuation changes: AI Assistant Location-Aware & Intelligent Query Enhancement
+
+The ClearSkies AI assistant was enhanced with an intelligent query understanding domain service, dynamic location resolution, real-time AQI retrieval, and multi-location comparison capabilities:
+- **Query Analyzer (`src/domain/ai/query-analyzer.ts`)**: Detects 7 question categories (`AQI_QUERY`, `HEALTH_PROTECTION`, `INDOOR_AIR`, `WEATHER_OUTDOOR`, `SUSTAINABLE_LIVING`, `COMMUNITY_AWARENESS`, `GENERAL`), extracts explicit locations (cities, international locations, PIN codes, sectors like "Sector 17 Chandigarh"), parses comparisons ("Mohali vs Delhi"), and handles conversational follow-ups.
+- **Orchestration Pipeline (`src/application/chat/ExecuteGeminiChatUseCase.ts`)**: Resolves locations via geocoding, retrieves live AQI from CPCB/Open-Meteo/WAQI for requested cities, and builds structured comparison contexts.
+- **GenAI Prompt & Demo (`src/infrastructure/ai/GoogleGenAIProvider.ts`)**: Formats resolved location metrics or structured comparisons into system instructions, explicitly preventing GPS fallback for named cities.
+- **CPCB Presets & Geocoding**: Added Mohali and Chandigarh ground-truth stations, PIN code resolution, and locality fallback search.
+- **Chat Presentation (`src/presentation/components/chat/AIAssistantView.tsx`)**: Renders location comparison summary cards for side-by-side AQI metrics.
 
 ## Remaining coverage gaps
 
